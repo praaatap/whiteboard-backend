@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,13 +7,538 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        String   @id @default(uuid())
-  name      String
-  email     String   @unique
-  password  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
 
+model User {
+  id              String            @id @default(uuid())
+  name            String
+  email           String            @unique
+  password        String
+  avatar          String?
+  bio             String?
+  role            UserRole          @default(USER)
+  isEmailVerified Boolean           @default(false)
+  lastLogin       DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  
+  // Relations
+  ownedDashboards     Dashboard[]        @relation("DashboardOwner")
+  dashboardMembers    DashboardMember[]
+  widgets             Widget[]           @relation("WidgetCreator")
+  comments            Comment[]
+  activities          Activity[]
+  notifications       Notification[]
+  invitations         Invitation[]
+  folders             Folder[]
+  sharedLinks         SharedLink[]
+  
+  @@index([email])
+  @@index([createdAt])
   @@map("users")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+// ============================================
+// DASHBOARD & WORKSPACES
+// ============================================
+
+model Dashboard {
+  id              String             @id @default(uuid())
+  title           String
+  description     String?
+  slug            String             @unique
+  thumbnail       String?
+  isPublic        Boolean            @default(false)
+  template        String             @default("blank")
+  isTemplate      Boolean            @default(false)
+  isArchived      Boolean            @default(false)
+  viewCount       Int                @default(0)
+  folderId        String?
+  folder          Folder?            @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  ownerId         String
+  owner           User               @relation("DashboardOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  settings        Json?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  lastAccessedAt  DateTime           @default(now())
+  
+  widgets         Widget[]
+  members         DashboardMember[]
+  whiteboardElements WhiteboardElement[] 
+  comments        Comment[]
+  activities      Activity[]
+  versions        DashboardVersion[]
+  tags            DashboardTag[]
+  sharedLinks     SharedLink[]
+  chatMessages    ChatMessage[]
+  
+  @@index([ownerId])
+  @@index([folderId])
+  @@index([slug])
+  @@index([createdAt])
+  @@index([template])
+  @@index([isPublic])
+  @@map("dashboards")
+}
+
+model Folder {
+  id              String         @id @default(uuid())
+  name            String
+  color           String?
+  icon            String?
+  parentId        String?
+  parent          Folder?        @relation("FolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
+  children        Folder[]       @relation("FolderHierarchy")
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dashboards      Dashboard[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  
+  @@index([userId])
+  @@index([parentId])
+  @@map("folders")
+}
+
+model DashboardMember {
+  id              String         @id @default(uuid())
+  dashboardId     String
+  dashboard       Dashboard      @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role            MemberRole     @default(VIEWER)
+  isStarred       Boolean        @default(false)
+  lastViewedAt    DateTime?
+  joinedAt        DateTime       @default(now())
+  
+  @@unique([dashboardId, userId])
+  @@index([dashboardId])
+  @@index([userId])
+  @@map("dashboard_members")
+}
+
+enum MemberRole {
+  OWNER
+  EDITOR
+  VIEWER
+  COMMENTER
+}
+
+model DashboardTag {
+  id              String         @id @default(uuid())
+  name            String
+  color           String?
+  dashboardId     String
+  dashboard       Dashboard      @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  createdAt       DateTime       @default(now())
+  
+  @@unique([dashboardId, name])
+  @@index([dashboardId])
+  @@map("dashboard_tags")
+}
+
+// ============================================
+// WIDGETS & COMPONENTS
+// ============================================
+
+model Widget {
+  id              String         @id @default(uuid())
+  dashboardId     String
+  dashboard       Dashboard      @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  type            WidgetType
+  title           String
+  description     String?
+  config          Json
+  position        Json
+  dataSource      String?
+  refreshInterval Int?
+  createdById     String
+  createdBy       User           @relation("WidgetCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  isLocked        Boolean        @default(false)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  
+  comments        Comment[]
+  
+  @@index([dashboardId])
+  @@index([createdById])
+  @@index([type])
+  @@map("widgets")
+}
+
+enum WidgetType {
+  CHART_LINE
+  CHART_BAR
+  CHART_PIE
+  CHART_AREA
+  CHART_SCATTER
+  KPI
+  TABLE
+  MAP
+  GAUGE
+  TIMELINE
+  TEXT
+  IMAGE
+  VIDEO
+  IFRAME
+  COUNTDOWN
+  WEATHER
+  CALENDAR
+  TODO_LIST
+  CUSTOM
+}
+
+// ============================================
+// COMMENTS & COLLABORATION
+// ============================================
+
+model Comment {
+  id              String         @id @default(uuid())
+  content         String
+  dashboardId     String?
+  dashboard       Dashboard?     @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  widgetId        String?
+  widget          Widget?        @relation(fields: [widgetId], references: [id], onDelete: Cascade)
+  authorId        String
+  author          User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parentId        String?
+  parent          Comment?       @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies         Comment[]      @relation("CommentReplies")
+  mentions        String[]
+  attachments     Json?
+  isResolved      Boolean        @default(false)
+  isEdited        Boolean        @default(false)
+  position        Json?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  
+  @@index([dashboardId])
+  @@index([widgetId])
+  @@index([authorId])
+  @@index([parentId])
+  @@map("comments")
+}
+
+// ============================================
+// ACTIVITY LOG & HISTORY (MERGED)
+// ============================================
+
+model Activity {
+  id              String         @id @default(uuid())
+  dashboardId     String
+  dashboard       Dashboard      @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  username        String         // Denormalized for performance
+  avatar          String         // Denormalized for performance
+  action          String         // Free text for flexibility
+  details         String         // Additional context
+  type            ActivityType   // Enum for filtering
+  timestamp       BigInt         // For real-time sorting
+  entityType      String?
+  entityId        String?
+  metadata        Json?
+  ipAddress       String?
+  createdAt       DateTime       @default(now())
+  
+  @@index([dashboardId])
+  @@index([userId])
+  @@index([createdAt])
+  @@index([timestamp])
+  @@index([type])
+  @@map("activities")
+}
+
+enum ActivityType {
+  CREATE
+  UPDATE
+  DELETE
+  INVITE
+  JOIN
+  LEAVE
+  COMMENT
+  SHARE
+  EXPORT
+  VIEW
+}
+
+model DashboardVersion {
+  id              String         @id @default(uuid())
+  dashboardId     String
+  dashboard       Dashboard      @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  versionNumber   Int
+  snapshot        Json
+  description     String?
+  changesSummary  Json?
+  createdAt       DateTime       @default(now())
+  
+  @@unique([dashboardId, versionNumber])
+  @@index([dashboardId])
+  @@index([createdAt])
+  @@map("dashboard_versions")
+}
+
+// ============================================
+// SHARING & PERMISSIONS
+// ============================================
+
+model SharedLink {
+  id              String         @id @default(uuid())
+  dashboardId     String
+  dashboard       Dashboard      @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  token           String         @unique @default(uuid())
+  password        String?
+  permission      MemberRole     @default(VIEWER)
+  expiresAt       DateTime?
+  maxViews        Int?
+  viewCount       Int            @default(0)
+  isActive        Boolean        @default(true)
+  createdById     String
+  createdBy       User           @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt       DateTime       @default(now())
+  
+  @@index([dashboardId])
+  @@index([token])
+  @@index([createdById])
+  @@map("shared_links")
+}
+
+model Invitation {
+  id              String         @id @default(uuid())
+  email           String
+  dashboardId     String
+  role            MemberRole     @default(VIEWER)
+  token           String         @unique @default(uuid())
+  invitedById     String
+  invitedBy       User           @relation(fields: [invitedById], references: [id], onDelete: Cascade)
+  status          InvitationStatus @default(PENDING)
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  createdAt       DateTime       @default(now())
+  
+  @@index([email])
+  @@index([token])
+  @@index([invitedById])
+  @@map("invitations")
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+model Notification {
+  id              String         @id @default(uuid())
+  userId          String
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type            NotificationType
+  title           String
+  message         String
+  link            String?
+  isRead          Boolean        @default(false)
+  metadata        Json?
+  createdAt       DateTime       @default(now())
+  readAt          DateTime?
+  
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+enum NotificationType {
+  COMMENT
+  MENTION
+  SHARE
+  INVITATION
+  MEMBER_JOINED
+  DASHBOARD_UPDATED
+  SYSTEM
+}
+
+// ============================================
+// INTEGRATIONS & DATA SOURCES
+// ============================================
+
+model Integration {
+  id              String         @id @default(uuid())
+  name            String
+  type            IntegrationType
+  credentials     String
+  config          Json
+  isActive        Boolean        @default(true)
+  lastSyncedAt    DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  
+  @@index([type])
+  @@map("integrations")
+}
+
+enum IntegrationType {
+  GOOGLE_ANALYTICS
+  POSTGRES
+  MONGODB
+  MYSQL
+  STRIPE
+  SALESFORCE
+  GOOGLE_SHEETS
+  AIRTABLE
+  NOTION
+  SLACK
+  DISCORD
+  WEBHOOKS
+  REST_API
+  GRAPHQL
+}
+
+// ============================================
+// TEMPLATES & MARKETPLACE
+// ============================================
+
+model Template {
+  id              String         @id @default(uuid())
+  name            String
+  description     String
+  thumbnail       String?
+  category        TemplateCategory
+  config          Json
+  popularity      Int            @default(0)
+  isOfficial      Boolean        @default(false)
+  tags            String[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  
+  @@index([category])
+  @@index([popularity])
+  @@map("templates")
+}
+
+enum TemplateCategory {
+  ANALYTICS
+  MARKETING
+  SALES
+  FINANCE
+  OPERATIONS
+  HR
+  PERSONAL
+  EDUCATION
+  OTHER
+}
+
+// ============================================
+// BILLING & SUBSCRIPTIONS
+// ============================================
+
+model Subscription {
+  id              String         @id @default(uuid())
+  userId          String         @unique
+  plan            SubscriptionPlan
+  status          SubscriptionStatus
+  startDate       DateTime
+  endDate         DateTime?
+  stripeCustomerId String?
+  stripeSubscriptionId String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  
+  @@index([userId])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+enum SubscriptionPlan {
+  FREE
+  PRO
+  TEAM
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  PAST_DUE
+  EXPIRED
+}
+
+// ============================================
+// WHITEBOARD & REAL-TIME COLLABORATION (MERGED & ENHANCED)
+// ============================================
+
+model WhiteboardElement {
+  id          String    @id // Frontend-defined IDs for real-time collab
+  
+  dashboardId String
+  dashboard   Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  
+  type        String    // 'rectangle', 'sticky', 'arrow', 'line', 'text', 'draw', 'circle'
+  
+  // JSON stores: x, y, width, height, text, strokeColor, fillColor, points (for lines), etc.
+  properties  Json      
+  
+  zIndex      Int       @default(10)  // Stacking order
+  isLocked    Boolean   @default(false) // Lock columns/templates
+  parentId    String?   // For grouping (Mind Maps)
+  createdBy   String?   // User ID who created
+  
+  // ✅ NEW: Comments on elements
+  comments    Json?     @default("[]") // Array of comment objects
+  
+  // ✅ NEW: Reactions (like, love, fire)
+  reactions   Json?     @default("[]") // Array of reaction objects
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([dashboardId])
+  @@index([parentId])
+  @@index([createdBy])
+  @@map("whiteboard_elements")
+}
+
+// ============================================
+// CHAT MESSAGES (Real-time)
+// ============================================
+
+model ChatMessage {
+  id          String    @id @default(uuid())
+  dashboardId String
+  dashboard   Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  userId      String
+  username    String
+  avatar      String
+  message     String    @db.Text
+  timestamp   BigInt    // For real-time sorting
+  
+  // ✅ NEW: Mentions support
+  mentions    String[]  @default([])
+  
+  // ✅ NEW: Attachments/files
+  attachments Json?
+  
+  // ✅ NEW: Reactions to messages
+  reactions   Json?     @default("[]")
+  
+  // ✅ NEW: Reply threading
+  replyTo     String?
+  
+  createdAt   DateTime  @default(now())
+
+  @@index([dashboardId, timestamp])
+  @@index([userId])
+  @@map("chat_messages")
 }
