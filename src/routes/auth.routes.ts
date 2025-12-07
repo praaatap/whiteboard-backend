@@ -146,9 +146,6 @@ router.get('/me', authenticateToken, async (req: AuthRequest, res: Response): Pr
   }
 });
 
-
-
-// Google OAuth signup/login
 router.post('/google', async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, name, avatar, googleId } = req.body;
@@ -162,13 +159,15 @@ router.post('/google', async (req: Request, res: Response): Promise<void> => {
     let user = await findUserByEmail(email);
 
     if (!user) {
-      // Create new user
+      // Create user if they don't exist
+      const randomPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8);
+
       user = await prisma.user.create({
         data: {
-          name,
+          name: name || "Unknown User",
           email,
-          password: '', // No password for OAuth users
-          avatar,
+          password: randomPassword,
+          avatar: avatar || "",
           isEmailVerified: true,
           role: 'USER',
         },
@@ -195,6 +194,5 @@ router.post('/google', async (req: Request, res: Response): Promise<void> => {
     res.status(500).json({ message: 'Internal server error', error: error.message });
   }
 });
-
 
 export default router;

@@ -16,10 +16,13 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 const prisma = new PrismaClient();
-const PORT = process.env.PORT || 5000;
+const PORT = 5000;
 
 app.use(cors({ origin: '*' }));
-app.use(express.json());
+
+// INCREASED LIMIT FOR BASE64 IMAGES
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -88,7 +91,6 @@ async function flushElementBatch(dashboardId: string) {
       skipDuplicates: true
     });
 
-    // Clear batch
     batch.items = [];
     if (batch.timer) {
       clearTimeout(batch.timer);
@@ -154,10 +156,8 @@ async function flushActivityBatch(dashboardId: string) {
   try {
     console.log(`💾 Flushing ${batch.items.length} activities to DB for dashboard ${dashboardId}`);
     
-    // FIX: Convert lowercase types to Uppercase to match Prisma Enum
     const formattedData = batch.items.map(item => ({
         ...item,
-        // Convert 'create' -> 'CREATE', 'join' -> 'JOIN', etc.
         type: item.type.toUpperCase() 
     }));
 
@@ -186,20 +186,15 @@ function addToElementBatch(dashboardId: string, element: any) {
   const batch = elementBatches.get(dashboardId)!;
   batch.items.push(element);
 
-  // Flush if batch size reached
   if (batch.items.length >= BATCH_CONFIG.ELEMENT_BATCH_SIZE) {
     flushElementBatch(dashboardId);
   } else if (!batch.timer) {
-    // Set timer for periodic flush
     batch.timer = setTimeout(() => flushElementBatch(dashboardId), BATCH_CONFIG.ELEMENT_FLUSH_INTERVAL);
   }
 }
 
 function addToUpdateQueue(elementId: string, update: any) {
-  // Deduplication: only keep the latest update for each element
   updateQueue.set(elementId, update);
-
-  // Flush periodically
   if (updateQueue.size >= 50) {
     flushUpdateQueue();
   }
@@ -237,7 +232,6 @@ function addToActivityBatch(dashboardId: string, activity: any) {
 
 // --- PERIODIC FLUSH (SAFETY NET) ---
 setInterval(() => {
-  // Flush all pending batches every 5 seconds as safety net
   elementBatches.forEach((_, dashboardId) => flushElementBatch(dashboardId));
   flushUpdateQueue();
   chatBatches.forEach((_, dashboardId) => flushChatBatch(dashboardId));
@@ -278,7 +272,7 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
 
   console.log(`✅ User ${user.name} (${connectionId}) connected to ${dashboardId}`);
 
-  // Load initial data (ONCE on connection)
+  // Load initial data
   try {
     const savedElements = await prisma.whiteboardElement.findMany({
       where: { dashboardId },
@@ -326,7 +320,7 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
     console.error("❌ Error loading history:", err);
   }
 
-  // User joined activity (batched)
+  // User joined activity
   const joinActivity = {
     id: `activity-${Date.now()}`,
     userId: user.userId,
@@ -368,7 +362,7 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
       const enhancedMsg = { 
         ...msg, 
         userId: user.userId, 
-        username: user.name,
+        username: user.name, 
         avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name)}&background=random`,
         clientId: connectionId 
       };
@@ -376,7 +370,6 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
       const userPres = presence.get(user.userId);
       if (userPres) userPres.lastSeen = Date.now();
 
-      // 1. CHAT MESSAGES (batched)
       if (msg.type === 'chat_message') {
         const chatMsg = {
           id: `chat-${Date.now()}`,
@@ -387,69 +380,33 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
           timestamp: Date.now(),
           dashboardId
         };
-
         addToChatBatch(dashboardId, chatMsg);
-
-        broadcast(dashboardId, {
-          type: 'chat_message',
-          message: chatMsg
-        }, '');
+        broadcast(dashboardId, { type: 'chat_message', message: chatMsg }, '');
       }
-
-      // 2. TYPING INDICATORS (no DB, memory only)
       else if (msg.type === 'typing_start') {
-        if (!typingUsers.has(dashboardId)) {
-          typingUsers.set(dashboardId, new Set());
-        }
+        if (!typingUsers.has(dashboardId)) typingUsers.set(dashboardId, new Set());
         typingUsers.get(dashboardId)!.add(user.userId);
-
-        broadcast(dashboardId, {
-          type: 'typing_indicator',
-          userId: user.userId,
-          username: user.name,
-          isTyping: true
-        }, connectionId);
-
+        broadcast(dashboardId, { type: 'typing_indicator', userId: user.userId, username: user.name, isTyping: true }, connectionId);
         setTimeout(() => {
           typingUsers.get(dashboardId)?.delete(user.userId);
-          broadcast(dashboardId, {
-            type: 'typing_indicator',
-            userId: user.userId,
-            username: user.name,
-            isTyping: false
-          }, connectionId);
+          broadcast(dashboardId, { type: 'typing_indicator', userId: user.userId, username: user.name, isTyping: false }, connectionId);
         }, 3000);
       }
-
-      // 3. STATUS CHANGE (memory only, broadcast immediately)
       else if (msg.type === 'status_change') {
         const userPres = presence.get(user.userId);
         if (userPres) {
           userPres.status = msg.status;
-          broadcast(dashboardId, {
-            type: 'presence_update',
-            userId: user.userId,
-            username: user.name,
-            status: msg.status
-          }, connectionId);
+          broadcast(dashboardId, { type: 'presence_update', userId: user.userId, username: user.name, status: msg.status }, connectionId);
         }
       }
-
-      // 4. CURSOR POSITION (memory only, no DB)
       else if (msg.type === 'cursor_move') {
         const userPres = presence.get(user.userId);
         if (userPres) {
           userPres.cursorX = msg.x;
           userPres.cursorY = msg.y;
         }
-        
-        broadcast(dashboardId, {
-          ...enhancedMsg,
-          color: userColor
-        }, connectionId);
+        broadcast(dashboardId, { ...enhancedMsg, color: userColor }, connectionId);
       }
-
-      // 5. COMMENTS (immediate DB write for critical data)
       else if (msg.type === 'add_comment') {
         const comment = {
           id: `comment-${Date.now()}`,
@@ -459,26 +416,14 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
           text: msg.text,
           timestamp: Date.now()
         };
-
-        const element = await prisma.whiteboardElement.findUnique({
-          where: { id: msg.elementId }
-        });
-
+        const element = await prisma.whiteboardElement.findUnique({ where: { id: msg.elementId } });
         if (element) {
           const existingComments = (element.comments as any[]) || [];
           await prisma.whiteboardElement.update({
             where: { id: msg.elementId },
-            data: {
-              comments: [...existingComments, comment]
-            }
+            data: { comments: [...existingComments, comment] }
           });
-
-          broadcast(dashboardId, {
-            type: 'element_comment_added',
-            elementId: msg.elementId,
-            comment
-          }, '');
-
+          broadcast(dashboardId, { type: 'element_comment_added', elementId: msg.elementId, comment }, '');
           const activity = {
             id: `activity-${Date.now()}`,
             userId: user.userId,
@@ -490,13 +435,10 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
             type: 'comment' as const,
             dashboardId
           };
-
           addToActivityBatch(dashboardId, activity);
           broadcast(dashboardId, { type: 'activity', activity }, '');
         }
       }
-
-      // 6. REACTIONS (batched updates)
       else if (msg.type === 'add_reaction') {
         const reaction = {
           userId: user.userId,
@@ -504,42 +446,23 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
           emoji: msg.emoji,
           timestamp: Date.now()
         };
-
-        const element = await prisma.whiteboardElement.findUnique({
-          where: { id: msg.elementId }
-        });
-
+        const element = await prisma.whiteboardElement.findUnique({ where: { id: msg.elementId } });
         if (element) {
           const reactions = ((element.properties as any).reactions || []);
-          
-          // Queue update instead of immediate write
           addToUpdateQueue(msg.elementId, {
             id: msg.elementId,
-            properties: {
-              ...(element.properties as object),
-              reactions: [...reactions, reaction]
-            },
+            properties: { ...(element.properties as object), reactions: [...reactions, reaction] },
             isLocked: element.isLocked
           });
-
-          broadcast(dashboardId, {
-            type: 'element_reaction',
-            elementId: msg.elementId,
-            reaction
-          }, '');
+          broadcast(dashboardId, { type: 'element_reaction', elementId: msg.elementId, reaction }, '');
         }
       }
-
-      // 7. VOICE/VIDEO SIGNALS (no DB, WebRTC only)
       if (['voice_signal', 'video_signal', 'join_voice', 'leave_voice', 'join_video', 'leave_video'].includes(msg.type)) {
         broadcast(dashboardId, enhancedMsg, connectionId);
         return;
       }
-
-      // 8. BATCH DRAW (batched)
       if (msg.type === 'batch_draw_action') {
         broadcast(dashboardId, { type: 'batch_draw_action', elements: msg.elements }, connectionId);
-
         const dbData = msg.elements.map((el: any) => {
            const { id, type, isLocked, parentId, ...props } = el;
            return {
@@ -553,17 +476,11 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
              properties: props
            };
         });
-
-        // Add all to batch
         dbData.forEach((item: any) => addToElementBatch(dashboardId, item));
       }
-
-      // 9. SINGLE DRAW (batched)
       else if (msg.type === 'draw_action') {
         broadcast(dashboardId, enhancedMsg, connectionId);
-        
         const { id, type, isLocked, parentId, ...props } : any = msg.element;
-        
         addToElementBatch(dashboardId, {
           id, 
           dashboardId,
@@ -574,7 +491,6 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
           createdBy: user.userId,
           properties: props
         });
-
         const activity = {
           id: `activity-${Date.now()}`,
           userId: user.userId,
@@ -586,31 +502,17 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
           type: 'create' as const,
           dashboardId
         };
-        
         addToActivityBatch(dashboardId, activity);
         broadcast(dashboardId, { type: 'activity', activity }, '');
       } 
-      
-      // 10. UPDATE ELEMENT (batched with deduplication)
       else if (msg.type === 'element_update') {
         broadcast(dashboardId, enhancedMsg, connectionId);
         const { id, type, isLocked, ...props } : any = msg.element;
-        
-        addToUpdateQueue(id, {
-          id,
-          properties: props,
-          isLocked: isLocked
-        });
+        addToUpdateQueue(id, { id, properties: props, isLocked: isLocked });
       } 
-      
-      // 11. CLEAR BOARD (immediate)
       else if (msg.type === 'clear_board') {
         broadcast(dashboardId, enhancedMsg, connectionId);
-        
-        await prisma.whiteboardElement.deleteMany({
-          where: { dashboardId }
-        });
-
+        await prisma.whiteboardElement.deleteMany({ where: { dashboardId } });
         const activity = {
           id: `activity-${Date.now()}`,
           userId: user.userId,
@@ -622,11 +524,9 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
           type: 'delete' as const,
           dashboardId
         };
-        
         addToActivityBatch(dashboardId, activity);
         broadcast(dashboardId, { type: 'activity', activity }, '');
       }
-
     } catch (err) {
       console.error("❌ WS Message Error:", err);
     }
@@ -634,13 +534,10 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
 
   socket.on('close', async () => {
     clearInterval(heartbeatInterval);
-    
     const conns = whiteboardConnections.get(dashboardId);
     conns?.delete(connectionId);
     if (conns?.size === 0) whiteboardConnections.delete(dashboardId);
-
     presence.delete(user.userId);
-
     const leaveActivity = {
       id: `activity-${Date.now()}`,
       userId: user.userId,
@@ -652,16 +549,8 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
       type: 'join' as const,
       dashboardId
     };
-
     addToActivityBatch(dashboardId, leaveActivity);
-
-    broadcast(dashboardId, { 
-      type: 'user_left', 
-      clientId: connectionId,
-      userId: user.userId,
-      activity: leaveActivity
-    }, connectionId);
-
+    broadcast(dashboardId, { type: 'user_left', clientId: connectionId, userId: user.userId, activity: leaveActivity }, connectionId);
     console.log(`❌ User ${user.name} disconnected from ${dashboardId}`);
   });
 });
@@ -669,7 +558,6 @@ wss.on('connection', async (socket: WebSocket, request: any) => {
 function broadcast(dashboardId: string, message: any, senderId: string) {
   const clients = whiteboardConnections.get(dashboardId);
   if (!clients) return;
-
   const msgStr = JSON.stringify({ ...message });
   clients.forEach((client, id) => {
     if (id !== senderId && client.readyState === WebSocket.OPEN) {
@@ -708,19 +596,14 @@ server.on('upgrade', (request, socket, head) => {
   }
 });
 
-// --- GRACEFUL SHUTDOWN ---
 async function gracefulShutdown() {
   console.log('⚠️  Shutting down gracefully...');
-  
-  // Flush all pending batches
-  console.log('💾 Flushing all pending batches...');
   await Promise.all([
     ...Array.from(elementBatches.keys()).map(id => flushElementBatch(id)),
     ...Array.from(chatBatches.keys()).map(id => flushChatBatch(id)),
     ...Array.from(activityBatches.keys()).map(id => flushActivityBatch(id)),
     flushUpdateQueue()
   ]);
-  
   await prisma.$disconnect();
   console.log('✅ All data saved. Goodbye!');
   process.exit(0);

@@ -34,7 +34,7 @@ router.get('/', authenticateToken, async (req: any, res) => {
   }
 });
 
-// ✅ CREATE DASHBOARD - This was missing!
+// Create Dashboard
 router.post('/', authenticateToken, async (req: any, res) => {
   try {
     const userId = req.user.userId;
@@ -43,7 +43,6 @@ router.post('/', authenticateToken, async (req: any, res) => {
     console.log('📊 Creating dashboard:', { title, template, userId });
     
     if (!title || !title.trim()) {
-      console.log('❌ Dashboard title is missing');
       return res.status(400).json({ error: 'Dashboard title is required' });
     }
     
@@ -64,7 +63,6 @@ router.post('/', authenticateToken, async (req: any, res) => {
     
     console.log(`✅ Created dashboard "${dashboard.title}" with ID ${dashboard.id}`);
     
-    // Return in the format the frontend expects
     res.json({
       message: 'Dashboard created successfully',
       dashboard
@@ -81,8 +79,6 @@ router.get('/:id', authenticateToken, async (req: any, res) => {
     const userId = req.user.userId;
     const dashboardId = req.params.id;
     
-    console.log('📊 Fetching dashboard:', dashboardId);
-    
     const dashboard = await prisma.dashboard.findFirst({
       where: { 
         id: dashboardId,
@@ -95,7 +91,6 @@ router.get('/:id', authenticateToken, async (req: any, res) => {
     });
     
     if (!dashboard) {
-      console.log('❌ Dashboard not found:', dashboardId);
       return res.status(404).json({ error: 'Dashboard not found' });
     }
     
@@ -108,7 +103,6 @@ router.get('/:id', authenticateToken, async (req: any, res) => {
       }
     });
     
-    console.log(`✅ Found dashboard "${dashboard.title}"`);
     res.json({
       message: 'Dashboard retrieved successfully',
       dashboard
@@ -126,14 +120,11 @@ router.put('/:id', authenticateToken, async (req: any, res) => {
     const dashboardId = req.params.id;
     const { title, description, folderId, isPublic, thumbnail } = req.body;
     
-    console.log('📊 Updating dashboard:', dashboardId);
-    
     const existingDashboard = await prisma.dashboard.findFirst({
       where: { id: dashboardId, ownerId: userId }
     });
     
     if (!existingDashboard) {
-      console.log('❌ Dashboard not found:', dashboardId);
       return res.status(404).json({ error: 'Dashboard not found' });
     }
     
@@ -148,7 +139,6 @@ router.put('/:id', authenticateToken, async (req: any, res) => {
       }
     });
     
-    console.log(`✅ Updated dashboard "${dashboard.title}"`);
     res.json({
       message: 'Dashboard updated successfully',
       dashboard
@@ -165,14 +155,11 @@ router.delete('/:id', authenticateToken, async (req: any, res) => {
     const userId = req.user.userId;
     const dashboardId = req.params.id;
     
-    console.log('📊 Deleting dashboard:', dashboardId);
-    
     const dashboard = await prisma.dashboard.findFirst({
       where: { id: dashboardId, ownerId: userId }
     });
     
     if (!dashboard) {
-      console.log('❌ Dashboard not found:', dashboardId);
       return res.status(404).json({ error: 'Dashboard not found' });
     }
     
@@ -180,7 +167,6 @@ router.delete('/:id', authenticateToken, async (req: any, res) => {
       where: { id: dashboardId }
     });
     
-    console.log(`✅ Deleted dashboard "${dashboard.title}"`);
     res.json({ message: 'Dashboard deleted successfully' });
   } catch (error: any) {
     console.error('❌ Delete dashboard error:', error);
